@@ -15,6 +15,7 @@ DATA_FILE = "latest_ads_data.json"
 GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
 GSC_SITE_URL = os.environ.get("GSC_SITE_URL")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CREDENTIALS_JSON_STR = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
 def get_google_credentials():
@@ -24,19 +25,18 @@ def get_google_credentials():
     try:
         return json.loads(raw)
     except Exception:
-        # Ignore automatiquement les doublons ou textes parasites collés après la fermeture du JSON
         decoder = json.JSONDecoder()
         obj, _ = decoder.raw_decode(raw)
         return obj
 
-# 1. Endpoint Webhook pour Google Ads
+# 1. Réception des données Google Ads via Webhook
 @app.post("/webhook/google-ads")
 async def receive_google_ads(request: Request):
     try:
         payload = await request.json()
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f)
-        return {"status": "success", "message": "Ads data stored"}
+        return {"status": "success", "message": "Données Ads enregistrées"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -71,7 +71,6 @@ def fetch_ga4():
             "engagement": f"{float(vals[3].value)*100:.1f}%"
         }
     except Exception as e:
-        print(f"Erreur GA4: {e}", flush=True)
         return {"erreur": str(e)}
 
 # 3. Collecte Search Console
@@ -100,10 +99,44 @@ def fetch_gsc():
             "position": round(rows[0].get("position", 0), 1)
         }
     except Exception as e:
-        print(f"Erreur GSC: {e}", flush=True)
         return {"erreur": str(e)}
 
-# 4. Génération et Envoi du Bilan Quotidien
+# 4. Analyse et audit IA via Google Gemini
+def generate_ai_analysis(payload):
+    if not GEMINI_API_KEY:
+        return "⚠️ Clé GEMINI_API_KEY absente dans Railway."
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    prompt = (
+        "Tu es le directeur d'acquisition et de croissance de la plateforme esport YourWin (yourwin.fr).\n"
+        "Analyse ces données de performance (Google Analytics, Search Console, Google Ads) :\n\n"
+        f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
+        "Rédige un audit stratégique ultra-concis (maximum 1100 caractères au total) structuré exactement ainsi :\n"
+        "**🎯 Bilan stratégique :** (Synthèse en 2 phrases du trafic et des conversions)\n"
+        "**⚠️ Points critiques & alertes :** (Fuites de conversion, sous-performance SEO ou acquisition)\n"
+        "**🚀 3 Actions prioritaires :** (3 décisions tactiques directes, sans formules de politesse)"
+    )
+    
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600}
+    }
+    
+    try:
+        res = requests.post(url, json=body, timeout=20)
+        if res.status_code != 200:
+            return f"⚠️ Erreur Gemini ({res.status_code}) : {res.text[:150]}"
+        data = res.json()
+        candidates = data.get("candidates", [])
+        if candidates and "content" in candidates[0]:
+            parts = candidates[0]["content"].get("parts", [])
+            if parts and "text" in parts[0]:
+                return parts[0]["text"].strip()
+        return "⚠️ Réponse vide de l'IA."
+    except Exception as e:
+        return f"⚠️ Échec appel Gemini : {str(e)}"
+
+# 5. Consolidation et Envoi Discord
 def execute_daily_intelligence():
     ga4 = fetch_ga4()
     gsc = fetch_gsc()
@@ -118,41 +151,57 @@ def execute_daily_intelligence():
 
     date_str = datetime.utcnow().strftime("%d/%m/%Y")
     
+    consolidated_payload = {
+        "date": date_str,
+        "ga4": ga4,
+        "search_console": gsc,
+        "google_ads": ads_data.get("totals", "Aucune donnée Ads reçue pour l'instant")
+    }
+    
+    ai_audit = generate_ai_analysis(consolidated_payload)
+    
     message = f"📊 **Bilan Quotidien Acquisition YourWin — {date_str}**\n\n"
     
+    # Données GA4
     if "erreur" in ga4:
-        message += f"📈 **Google Analytics (Erreur de connexion) :**\n⚠️ `{ga4['erreur'][:250]}`\n\n"
+        message += f"📈 **Google Analytics :** ⚠️ `{ga4['erreur'][:120]}`\n"
     else:
         message += (
             f"📈 **Google Analytics (Hier) :**\n"
-            f"• Utilisateurs actifs : **{ga4.get('utilisateurs', 0)}**\n"
-            f"• Sessions : **{ga4.get('sessions', 0)}**\n"
-            f"• Inscriptions / Conversions : **{ga4.get('inscriptions', 0)}**\n"
-            f"• Taux d'engagement : **{ga4.get('engagement', '0%')}**\n\n"
+            f"• Visiteurs : **{ga4.get('utilisateurs', 0)}** | Sessions : **{ga4.get('sessions', 0)}**\n"
+            f"• Inscriptions : **{ga4.get('inscriptions', 0)}** | Engagement : **{ga4.get('engagement', '0%')}**\n"
         )
 
+    # Données Search Console
     if "erreur" in gsc:
-        message += f"🔍 **Google Search Console (Erreur de connexion) :**\n⚠️ `{gsc['erreur'][:250]}`\n\n"
+        message += f"🔍 **Search Console :** ⚠️ `{gsc['erreur'][:120]}`\n"
     else:
         message += (
-            f"🔍 **Google Search Console (J-3) :**\n"
-            f"• Clics organiques : **{gsc.get('clics', 0)}**\n"
-            f"• Impressions : **{gsc.get('impressions', 0)}**\n"
-            f"• CTR moyen : **{gsc.get('ctr', '0%')}**\n"
-            f"• Position moyenne : **{gsc.get('position', 0)}**\n\n"
+            f"🔍 **Search Console (J-3) :**\n"
+            f"• Clics SEO : **{gsc.get('clics', 0)}** | Impressions : **{gsc.get('impressions', 0)}**\n"
+            f"• CTR : **{gsc.get('ctr', '0%')}** | Position moyenne : **{gsc.get('position', 0)}**\n"
         )
 
+    # Données Google Ads
     if "totals" in ads_data:
         t = ads_data["totals"]
         message += (
             f"🎯 **Google Ads :**\n"
-            f"• Dépense : **{t.get('cost', 'N/A')} €** | Clics : **{t.get('clicks', 'N/A')}** | Conversions : **{t.get('conversions', 'N/A')}**\n"
+            f"• Coût : **{t.get('cost', 'N/A')} €** | Clics : **{t.get('clicks', 'N/A')}** | Conversions : **{t.get('conversions', 'N/A')}**\n"
         )
+    else:
+        message += "🎯 **Google Ads :** En attente de données (script Ads non synchronisé)\n"
+
+    message += f"\n---\n🧠 **Audit & Recommandations IA :**\n{ai_audit}"
+
+    # Tronquage de sécurité sous 1950 caractères
+    if len(message) > 1950:
+        message = message[:1940] + "\n..."
 
     if DISCORD_WEBHOOK_URL:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# Planification automatique à 07h00 UTC
+# Planification automatique quotidienne à 07h00 UTC
 scheduler = BackgroundScheduler()
 scheduler.add_job(execute_daily_intelligence, "cron", hour=7, minute=0)
 scheduler.start()
