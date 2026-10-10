@@ -15,7 +15,6 @@ DATA_FILE = "latest_ads_data.json"
 GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
 GSC_SITE_URL = os.environ.get("GSC_SITE_URL")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CREDENTIALS_JSON_STR = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
 # 1. Endpoint Webhook pour Google Ads
@@ -33,7 +32,7 @@ async def receive_google_ads(request: Request):
 def fetch_ga4():
     try:
         if not CREDENTIALS_JSON_STR or not GA4_PROPERTY_ID:
-            return {"erreur_ga4": "Credentials GA4 manquants"}
+            return {"erreur": "Credentials GA4 manquants"}
         creds_dict = json.loads(CREDENTIALS_JSON_STR)
         client = BetaAnalyticsDataClient.from_service_account_info(creds_dict)
         request = RunReportRequest(
@@ -57,13 +56,13 @@ def fetch_ga4():
             "engagement": f"{float(vals[3].value)*100:.1f}%"
         }
     except Exception as e:
-        return {"erreur_ga4": str(e)}
+        return {"erreur": str(e)}
 
 # 3. Collecte Search Console
 def fetch_gsc():
     try:
         if not CREDENTIALS_JSON_STR or not GSC_SITE_URL:
-            return {"erreur_gsc": "Credentials GSC manquants"}
+            return {"erreur": "Credentials GSC manquants"}
         creds_dict = json.loads(CREDENTIALS_JSON_STR)
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
@@ -82,10 +81,13 @@ def fetch_gsc():
             "position": round(rows[0].get("position", 0), 1)
         }
     except Exception as e:
-        return {"erreur_gsc": str(e)}
+        return {"erreur": str(e)}
 
-# 4. Analyse IA et Envoi Discord
+# 4. Génération et Envoi du Bilan Quotidien
 def execute_daily_intelligence():
+    ga4 = fetch_ga4()
+    gsc = fetch_gsc()
+    
     ads_data = {}
     if os.path.exists(DATA_FILE):
         try:
@@ -94,38 +96,32 @@ def execute_daily_intelligence():
         except Exception:
             ads_data = {}
 
-    consolidated_payload = {
-        "date_rapport": datetime.utcnow().strftime("%Y-%m-%d"),
-        "ga4": fetch_ga4(),
-        "search_console": fetch_gsc(),
-        "google_ads": ads_data.get("totals", {"info": "Aucune donnee Ads reçue pour l'instant"})
-    }
-
-    prompt_system = """Tu es le directeur d'acquisition du site YourWin. Analyse ces chiffres de trafic et conversion.
-Focus absolu : Inscriptions YourWin, nombre de clics, taux CTR et rentabilité des dépenses.
-Format strict :
-- **Bilan du jour :** Inscriptions, clics totaux, CTR moyen, coût par acquisition.
-- **Anomalies & alertes :** Ce qui ne fonctionne pas ou ce qui décroche.
-- **3 actions correctives immédiates :** Directes, opérationnelles, sans formule de politesse."""
-
-    res = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        json={
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": json.dumps(consolidated_payload, indent=2)}
-            ],
-            "temperature": 0.2
-        }
+    date_str = datetime.utcnow().strftime("%d/%m/%Y")
+    
+    # Construction du message Discord
+    message = (
+        f"📊 **Bilan Quotidien Acquisition YourWin — {date_str}**\n\n"
+        f"📈 **Google Analytics (Hier) :**\n"
+        f"• Utilisateurs actifs : **{ga4.get('utilisateurs', 'N/A')}**\n"
+        f"• Sessions : **{ga4.get('sessions', 'N/A')}**\n"
+        f"• Inscriptions / Conversions : **{ga4.get('inscriptions', 'N/A')}**\n"
+        f"• Taux d'engagement : **{ga4.get('engagement', 'N/A')}**\n\n"
+        f"🔍 **Google Search Console (J-3) :**\n"
+        f"• Clics organiques : **{gsc.get('clics', 'N/A')}**\n"
+        f"• Impressions : **{gsc.get('impressions', 'N/A')}**\n"
+        f"• CTR moyen : **{gsc.get('ctr', 'N/A')}**\n"
+        f"• Position moyenne : **{gsc.get('position', 'N/A')}**\n"
     )
-    data_res = res.json()
-    analysis = data_res.get("choices", [{}])[0].get("message", {}).get("content", "Erreur lors de la génération du rapport.")
+
+    if "totals" in ads_data:
+        t = ads_data["totals"]
+        message += (
+            f"\n🎯 **Google Ads :**\n"
+            f"• Dépense : **{t.get('cost', 'N/A')} €** | Clics : **{t.get('clicks', 'N/A')}** | Conversions : **{t.get('conversions', 'N/A')}**\n"
+        )
 
     if DISCORD_WEBHOOK_URL:
-        message_text = f"📊 **Rapport Quotidien YourWin**\n\n{analysis}"
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": message_text})
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
 # Planification automatique à 07h00 UTC
 scheduler = BackgroundScheduler()
