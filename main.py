@@ -17,6 +17,18 @@ GSC_SITE_URL = os.environ.get("GSC_SITE_URL")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 CREDENTIALS_JSON_STR = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
+def get_google_credentials():
+    if not CREDENTIALS_JSON_STR:
+        return None
+    raw = CREDENTIALS_JSON_STR.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        # Ignore automatiquement les doublons ou textes parasites collés après la fermeture du JSON
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(raw)
+        return obj
+
 # 1. Endpoint Webhook pour Google Ads
 @app.post("/webhook/google-ads")
 async def receive_google_ads(request: Request):
@@ -31,11 +43,12 @@ async def receive_google_ads(request: Request):
 # 2. Collecte GA4
 def fetch_ga4():
     try:
-        if not CREDENTIALS_JSON_STR:
-            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante sur Railway"}
+        creds_dict = get_google_credentials()
+        if not creds_dict:
+            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante"}
         if not GA4_PROPERTY_ID:
             return {"erreur": "Variable GA4_PROPERTY_ID manquante"}
-        creds_dict = json.loads(CREDENTIALS_JSON_STR)
+        
         client = BetaAnalyticsDataClient.from_service_account_info(creds_dict)
         request = RunReportRequest(
             property=f"properties/{GA4_PROPERTY_ID}",
@@ -64,11 +77,12 @@ def fetch_ga4():
 # 3. Collecte Search Console
 def fetch_gsc():
     try:
-        if not CREDENTIALS_JSON_STR:
-            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante sur Railway"}
+        creds_dict = get_google_credentials()
+        if not creds_dict:
+            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante"}
         if not GSC_SITE_URL:
             return {"erreur": "Variable GSC_SITE_URL manquante"}
-        creds_dict = json.loads(CREDENTIALS_JSON_STR)
+        
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
         )
@@ -138,7 +152,7 @@ def execute_daily_intelligence():
     if DISCORD_WEBHOOK_URL:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# Planification quotidienne à 07h00 UTC
+# Planification automatique à 07h00 UTC
 scheduler = BackgroundScheduler()
 scheduler.add_job(execute_daily_intelligence, "cron", hour=7, minute=0)
 scheduler.start()
