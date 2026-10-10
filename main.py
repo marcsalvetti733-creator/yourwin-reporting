@@ -106,7 +106,6 @@ def generate_ai_analysis(payload):
     if not GEMINI_API_KEY:
         return "⚠️ Clé GEMINI_API_KEY absente dans Railway."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     prompt = (
         "Tu es le directeur d'acquisition et de croissance de la plateforme esport YourWin (yourwin.fr).\n"
         "Analyse ces données de performance (Google Analytics, Search Console, Google Ads) :\n\n"
@@ -122,19 +121,31 @@ def generate_ai_analysis(payload):
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600}
     }
     
-    try:
-        res = requests.post(url, json=body, timeout=20)
-        if res.status_code != 200:
-            return f"⚠️ Erreur Gemini ({res.status_code}) : {res.text[:150]}"
-        data = res.json()
-        candidates = data.get("candidates", [])
-        if candidates and "content" in candidates[0]:
-            parts = candidates[0]["content"].get("parts", [])
-            if parts and "text" in parts[0]:
-                return parts[0]["text"].strip()
-        return "⚠️ Réponse vide de l'IA."
-    except Exception as e:
-        return f"⚠️ Échec appel Gemini : {str(e)}"
+    # Endpoints officiels testés dans l'ordre de priorité
+    endpoints = [
+        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-002:generateContent?key={GEMINI_API_KEY}"
+    ]
+    
+    last_error = ""
+    for url in endpoints:
+        try:
+            res = requests.post(url, json=body, timeout=20)
+            if res.status_code == 200:
+                data = res.json()
+                candidates = data.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    parts = candidates[0]["content"].get("parts", [])
+                    if parts and "text" in parts[0]:
+                        return parts[0]["text"].strip()
+            else:
+                last_error = f"{res.status_code} : {res.text[:120]}"
+        except Exception as e:
+            last_error = str(e)
+            
+    return f"⚠️ Échec appel Gemini : {last_error}"
 
 # 5. Consolidation et Envoi Discord
 def execute_daily_intelligence():
@@ -194,7 +205,6 @@ def execute_daily_intelligence():
 
     message += f"\n---\n🧠 **Audit & Recommandations IA :**\n{ai_audit}"
 
-    # Tronquage de sécurité sous 1950 caractères
     if len(message) > 1950:
         message = message[:1940] + "\n..."
 
