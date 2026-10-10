@@ -16,6 +16,8 @@ GA4_PROPERTY_ID = (os.environ.get("GA4_PROPERTY_ID") or "").strip()
 GSC_SITE_URL = (os.environ.get("GSC_SITE_URL") or "").strip()
 DISCORD_WEBHOOK_URL = (os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+INSTAGRAM_ACCOUNT_ID = (os.environ.get("INSTAGRAM_ACCOUNT_ID") or "").strip()
+INSTAGRAM_ACCESS_TOKEN = (os.environ.get("INSTAGRAM_ACCESS_TOKEN") or "").strip()
 CREDENTIALS_JSON_STR = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
 def get_google_credentials():
@@ -101,14 +103,53 @@ def fetch_gsc():
     except Exception as e:
         return {"erreur": str(e)}
 
-# 4. Audit IA via Gemini 3
+# 4. Collecte Instagram
+def fetch_instagram():
+    if not INSTAGRAM_ACCOUNT_ID or not INSTAGRAM_ACCESS_TOKEN:
+        return {"erreur": "Variables Instagram non configurees dans Railway"}
+    
+    try:
+        user_url = f"https://graph.facebook.com/v21.0/{INSTAGRAM_ACCOUNT_ID}"
+        user_params = {
+            "fields": "followers_count,media_count",
+            "access_token": INSTAGRAM_ACCESS_TOKEN
+        }
+        res_user = requests.get(user_url, params=user_params, timeout=15)
+        if res_user.status_code != 200:
+            return {"erreur": f"Erreur API ({res_user.status_code}) : {res_user.text[:100]}"}
+        user_data = res_user.json()
+
+        insights_url = f"https://graph.facebook.com/v21.0/{INSTAGRAM_ACCOUNT_ID}/insights"
+        insights_params = {
+            "metric": "reach",
+            "period": "day",
+            "access_token": INSTAGRAM_ACCESS_TOKEN
+        }
+        reach_val = "N/A"
+        res_insights = requests.get(insights_url, params=insights_params, timeout=15)
+        if res_insights.status_code == 200:
+            data_ins = res_insights.json().get("data", [])
+            if data_ins and "values" in data_ins[0]:
+                vals = data_ins[0]["values"]
+                if vals:
+                    reach_val = vals[-1].get("value", "N/A")
+
+        return {
+            "abonnes": user_data.get("followers_count", 0),
+            "publications": user_data.get("media_count", 0),
+            "portee_jour": reach_val
+        }
+    except Exception as e:
+        return {"erreur": str(e)}
+
+# 5. Audit IA via Gemini
 def generate_ai_analysis(payload):
     if not GEMINI_API_KEY:
         return "⚠️ Clé GEMINI_API_KEY absente dans Railway."
     
     prompt = (
         "Tu es le directeur d'acquisition de la plateforme esport YourWin (yourwin.fr).\n"
-        "Analyse ces donnees d'acquisition d'hier :\n"
+        "Analyse ces donnees d'acquisition d'hier (GA4, Search Console, Google Ads, Instagram) :\n"
         f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
         "Redige un audit strategique concis (maximum 900 caracteres) :\n"
         "**🎯 Bilan express :** (2 phrases)\n"
@@ -121,7 +162,6 @@ def generate_ai_analysis(payload):
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 500}
     }
 
-    # Modèles Gemini 3 supportés pour les nouveaux comptes
     target_models = [
         "models/gemini-3.5-flash-lite",
         "models/gemini-3.8-flash",
@@ -148,10 +188,11 @@ def generate_ai_analysis(payload):
             
     return f"⚠️ Échec appel Gemini : {last_error}"
 
-# 5. Consolidation et Envoi Discord
+# 6. Consolidation et Envoi Discord
 def execute_daily_intelligence():
     ga4 = fetch_ga4()
     gsc = fetch_gsc()
+    insta = fetch_instagram()
     
     ads_data = {}
     if os.path.exists(DATA_FILE):
@@ -166,7 +207,8 @@ def execute_daily_intelligence():
         "date": date_str,
         "ga4": ga4,
         "search_console": gsc,
-        "google_ads": ads_data.get("totals", "Non configure")
+        "google_ads": ads_data.get("totals", "Non configure"),
+        "instagram": insta
     }
     
     ai_audit = generate_ai_analysis(consolidated_payload)
@@ -199,6 +241,15 @@ def execute_daily_intelligence():
         )
     else:
         message += "🎯 **Google Ads :** En attente de données (script Ads non synchronisé)\n"
+
+    if "erreur" in insta:
+        message += f"📸 **Instagram :** ⚠️ `{insta['erreur'][:120]}`\n"
+    else:
+        message += (
+            f"📸 **Instagram :**\n"
+            f"• Abonnés : **{insta.get('abonnes', 0)}** | Publications : **{insta.get('publications', 0)}**\n"
+            f"• Portée quotidienne (Reach) : **{insta.get('portee_jour', 'N/A')}**\n"
+        )
 
     message += f"\n---\n🧠 **Audit & Recommandations IA :**\n{ai_audit}"
 
