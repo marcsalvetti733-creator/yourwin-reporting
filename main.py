@@ -72,3 +72,35 @@ def fetch_gsc():
         target_date = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         body = {"startDate": target_date, "endDate": target_date, "dimensions": []}
         res = service.searchanalytics().query(siteUrl=GSC_SITE_URL, body=body).execute()
+        rows = res.get("rows", [])
+        if not rows:
+            return {"clics": 0, "impressions": 0, "ctr": "0%", "position": 0}
+        return {
+            "clics": rows[0].get("clicks", 0),
+            "impressions": rows[0].get("impressions", 0),
+            "ctr": f"{rows[0].get('ctr', 0)*100:.1f}%",
+            "position": round(rows[0].get("position", 0), 1)
+        }
+    except Exception as e:
+        return {"erreur_gsc": str(e)}
+
+# 4. Analyse IA et Envoi Discord
+def execute_daily_intelligence():
+    ads_data = {}
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                ads_data = json.load(f)
+        except Exception:
+            ads_data = {}
+
+    consolidated_payload = {
+        "date_rapport": datetime.utcnow().strftime("%Y-%m-%d"),
+        "ga4": fetch_ga4(),
+        "search_console": fetch_gsc(),
+        "google_ads": ads_data.get("totals", {"info": "Aucune donnee Ads reçue pour l'instant"})
+    }
+
+    prompt_system = (
+        "Tu es le directeur d'acquisition du site YourWin. Analyse ces chiffres de trafic et conversion.\n"
+        "Focus
