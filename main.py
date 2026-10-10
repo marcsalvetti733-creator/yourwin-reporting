@@ -101,6 +101,42 @@ def execute_daily_intelligence():
         "google_ads": ads_data.get("totals", {"info": "Aucune donnee Ads reçue pour l'instant"})
     }
 
-    prompt_system = (
-        "Tu es le directeur d'acquisition du site YourWin. Analyse ces chiffres de trafic et conversion.\n"
-        "Focus
+    prompt_system = """Tu es le directeur d'acquisition du site YourWin. Analyse ces chiffres de trafic et conversion.
+Focus absolu : Inscriptions YourWin, nombre de clics, taux CTR et rentabilité des dépenses.
+Format strict :
+- **Bilan du jour :** Inscriptions, clics totaux, CTR moyen, coût par acquisition.
+- **Anomalies & alertes :** Ce qui ne fonctionne pas ou ce qui décroche.
+- **3 actions correctives immédiates :** Directes, opérationnelles, sans formule de politesse."""
+
+    res = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "system", "content": prompt_system},
+                {"role": "user", "content": json.dumps(consolidated_payload, indent=2)}
+            ],
+            "temperature": 0.2
+        }
+    )
+    data_res = res.json()
+    analysis = data_res.get("choices", [{}])[0].get("message", {}).get("content", "Erreur lors de la génération du rapport.")
+
+    if DISCORD_WEBHOOK_URL:
+        message_text = f"📊 **Rapport Quotidien YourWin**\n\n{analysis}"
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": message_text})
+
+# Planification automatique à 07h00 UTC
+scheduler = BackgroundScheduler()
+scheduler.add_job(execute_daily_intelligence, "cron", hour=7, minute=0)
+scheduler.start()
+
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+@app.get("/trigger-now")
+def trigger_now():
+    execute_daily_intelligence()
+    return {"status": "rapport envoyé sur Discord"}
