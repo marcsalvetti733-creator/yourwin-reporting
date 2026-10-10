@@ -31,8 +31,10 @@ async def receive_google_ads(request: Request):
 # 2. Collecte GA4
 def fetch_ga4():
     try:
-        if not CREDENTIALS_JSON_STR or not GA4_PROPERTY_ID:
-            return {"erreur": "Credentials GA4 manquants"}
+        if not CREDENTIALS_JSON_STR:
+            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante sur Railway"}
+        if not GA4_PROPERTY_ID:
+            return {"erreur": "Variable GA4_PROPERTY_ID manquante"}
         creds_dict = json.loads(CREDENTIALS_JSON_STR)
         client = BetaAnalyticsDataClient.from_service_account_info(creds_dict)
         request = RunReportRequest(
@@ -56,13 +58,16 @@ def fetch_ga4():
             "engagement": f"{float(vals[3].value)*100:.1f}%"
         }
     except Exception as e:
+        print(f"Erreur GA4: {e}", flush=True)
         return {"erreur": str(e)}
 
 # 3. Collecte Search Console
 def fetch_gsc():
     try:
-        if not CREDENTIALS_JSON_STR or not GSC_SITE_URL:
-            return {"erreur": "Credentials GSC manquants"}
+        if not CREDENTIALS_JSON_STR:
+            return {"erreur": "Variable GOOGLE_CREDENTIALS_JSON manquante sur Railway"}
+        if not GSC_SITE_URL:
+            return {"erreur": "Variable GSC_SITE_URL manquante"}
         creds_dict = json.loads(CREDENTIALS_JSON_STR)
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, scopes=["https://www.googleapis.com/auth/webmasters.readonly"]
@@ -81,6 +86,7 @@ def fetch_gsc():
             "position": round(rows[0].get("position", 0), 1)
         }
     except Exception as e:
+        print(f"Erreur GSC: {e}", flush=True)
         return {"erreur": str(e)}
 
 # 4. Génération et Envoi du Bilan Quotidien
@@ -98,32 +104,41 @@ def execute_daily_intelligence():
 
     date_str = datetime.utcnow().strftime("%d/%m/%Y")
     
-    # Construction du message Discord
-    message = (
-        f"📊 **Bilan Quotidien Acquisition YourWin — {date_str}**\n\n"
-        f"📈 **Google Analytics (Hier) :**\n"
-        f"• Utilisateurs actifs : **{ga4.get('utilisateurs', 'N/A')}**\n"
-        f"• Sessions : **{ga4.get('sessions', 'N/A')}**\n"
-        f"• Inscriptions / Conversions : **{ga4.get('inscriptions', 'N/A')}**\n"
-        f"• Taux d'engagement : **{ga4.get('engagement', 'N/A')}**\n\n"
-        f"🔍 **Google Search Console (J-3) :**\n"
-        f"• Clics organiques : **{gsc.get('clics', 'N/A')}**\n"
-        f"• Impressions : **{gsc.get('impressions', 'N/A')}**\n"
-        f"• CTR moyen : **{gsc.get('ctr', 'N/A')}**\n"
-        f"• Position moyenne : **{gsc.get('position', 'N/A')}**\n"
-    )
+    message = f"📊 **Bilan Quotidien Acquisition YourWin — {date_str}**\n\n"
+    
+    if "erreur" in ga4:
+        message += f"📈 **Google Analytics (Erreur de connexion) :**\n⚠️ `{ga4['erreur'][:250]}`\n\n"
+    else:
+        message += (
+            f"📈 **Google Analytics (Hier) :**\n"
+            f"• Utilisateurs actifs : **{ga4.get('utilisateurs', 0)}**\n"
+            f"• Sessions : **{ga4.get('sessions', 0)}**\n"
+            f"• Inscriptions / Conversions : **{ga4.get('inscriptions', 0)}**\n"
+            f"• Taux d'engagement : **{ga4.get('engagement', '0%')}**\n\n"
+        )
+
+    if "erreur" in gsc:
+        message += f"🔍 **Google Search Console (Erreur de connexion) :**\n⚠️ `{gsc['erreur'][:250]}`\n\n"
+    else:
+        message += (
+            f"🔍 **Google Search Console (J-3) :**\n"
+            f"• Clics organiques : **{gsc.get('clics', 0)}**\n"
+            f"• Impressions : **{gsc.get('impressions', 0)}**\n"
+            f"• CTR moyen : **{gsc.get('ctr', '0%')}**\n"
+            f"• Position moyenne : **{gsc.get('position', 0)}**\n\n"
+        )
 
     if "totals" in ads_data:
         t = ads_data["totals"]
         message += (
-            f"\n🎯 **Google Ads :**\n"
+            f"🎯 **Google Ads :**\n"
             f"• Dépense : **{t.get('cost', 'N/A')} €** | Clics : **{t.get('clicks', 'N/A')}** | Conversions : **{t.get('conversions', 'N/A')}**\n"
         )
 
     if DISCORD_WEBHOOK_URL:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# Planification automatique à 07h00 UTC
+# Planification quotidienne à 07h00 UTC
 scheduler = BackgroundScheduler()
 scheduler.add_job(execute_daily_intelligence, "cron", hour=7, minute=0)
 scheduler.start()
