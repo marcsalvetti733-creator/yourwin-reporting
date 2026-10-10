@@ -189,24 +189,48 @@ def fetch_instagram():
     except Exception as e:
         return {"erreur": str(e)}
 
-# 5. Audit IA via Gemini 3
+# 5. Audit IA expert connecté à la stratégie YourWin
 def generate_ai_analysis(payload):
     if not GEMINI_API_KEY:
         return "⚠️ Clé GEMINI_API_KEY absente dans Railway."
     
-    prompt = (
-        "Tu es le directeur d'acquisition de la plateforme esport YourWin (yourwin.fr).\n"
-        "Analyse ces données d'acquisition d'hier (GA4, Search Console, Google Ads, Instagram) :\n"
-        f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
-        "Rédige un audit stratégique concis (maximum 900 caractères) :\n"
-        "**🎯 Bilan express :** (2 phrases)\n"
-        "**⚠️ Points d'attention :** (1 alerte ou faiblesse)\n"
-        "**🚀 3 Actions prioritaires :** (3 puces directes)"
-    )
+    # Base de connaissances extraite du Master Deck et de la stratégie YourWin
+    contexte_yourwin = """
+    CONTEXTE STRATÉGIQUE DE LA PLATEFORME YOURWIN (yourwin.fr) :
+    - Nature du produit : Première plateforme technologique de tiers de confiance pour l'e-sport compétitif amateur (duels 1v1 et tournois).
+    - Positionnement : "Ton niveau, ton gain". Purement "Skill-based" (adresse/compétence), PAS du pari de hasard ni du casino (hors régulation stricte des paris sportifs ANJ). Séquestre automatisé pour neutraliser la mauvaise foi et les impayés entre joueurs.
+    - Jeux cibles prioritaires : EA Sports FC 26, Tekken 8, Rocket League, Call of Duty, Street Fighter 6.
+    - Modèle économique : Take rate de 5% sur la cagnotte globale des duels (mise moyenne 10 €/joueur = 20 € de cagnotte).
+    - Cible utilisateur : Joueurs compétitifs 18-25 ans, lassés de l'inutilité des modes classés classiques sans récompense concrète.
+    - Objectifs opérationnels actuels : Cohorte de 500 bêta-testeurs, CAC cible < 2,30 €, conversion landing page > 25 %, taux d'engagement GA4 cible > 45 %.
+    - Canaux d'acquisition prévus : Reels Instagram (viralité sur la frustration de la défaite/rivalité), Google Ads (Search intentionniste : tournois cashprize, tournoi fc), partenariats communautés Discord et micro-streamers.
+    """
+
+    prompt = f"""
+    Tu es le Directeur de l'Acquisition et Chief Strategy Officer de YourWin.
+    
+    {contexte_yourwin}
+
+    Voici les métriques de la journée d'hier transmises par le pipeline :
+    {json.dumps(payload, indent=2, ensure_ascii=False)}
+
+    Rédige un audit exécutif tranchant, sans jargon creux, calibré pour les fondateurs (maximum 1100 caractères) :
+    
+    **🎯 Diagnostic Business & Écarts :** 
+    (Compare les chiffres réels aux objectifs de YourWin : engagement, volume d'inscriptions, conversion. Nomme immédiatement la cause racine du problème).
+    
+    **⚠️ Alerte Critique :** 
+    (Le goulot d'étranglement numéro 1 qui brûle du cash ou bloque l'atteinte des 500 bêta-testeurs).
+    
+    **🚀 3 Décisions Opérationnelles Immédiates :**
+    - Action 1 (Acquisition payante ou SEO : action chirurgicale sur les mots-clés ou le ciblage)
+    - Action 2 (Conversion / UX : friction à corriger sur la landing page ou le tracking)
+    - Action 3 (Réseaux / Instagram : angle éditorial ou activation communautaire esport précise)
+    """
     
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 500}
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 600}
     }
 
     target_models = [
