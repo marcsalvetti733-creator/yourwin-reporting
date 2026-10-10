@@ -103,55 +103,102 @@ def fetch_gsc():
     except Exception as e:
         return {"erreur": str(e)}
 
-# 4. Collecte Instagram
+# Fonction utilitaire pour la portée Instagram
+def get_ig_reach(ig_id, token):
+    try:
+        url = f"https://graph.facebook.com/v21.0/{ig_id}/insights"
+        params = {"metric": "reach", "period": "day", "access_token": token}
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("data", [])
+            if data and "values" in data[0]:
+                vals = data[0]["values"]
+                if vals:
+                    return vals[-1].get("value", "0")
+        return "N/A"
+    except Exception:
+        return "N/A"
+
+# 4. Collecte Instagram avec auto-résolution Page / Compte Business
 def fetch_instagram():
     if not INSTAGRAM_ACCOUNT_ID or not INSTAGRAM_ACCESS_TOKEN:
-        return {"erreur": "Variables Instagram non configurees dans Railway"}
+        return {"erreur": "Variables Instagram non configurées dans Railway"}
     
     try:
-        user_url = f"https://graph.facebook.com/v21.0/{INSTAGRAM_ACCOUNT_ID}"
-        user_params = {
-            "fields": "followers_count,media_count",
+        # Tentative 1 : L'ID est directement un compte Instagram Business
+        direct_url = f"https://graph.facebook.com/v21.0/{INSTAGRAM_ACCOUNT_ID}"
+        direct_params = {
+            "fields": "followers_count,media_count,username",
             "access_token": INSTAGRAM_ACCESS_TOKEN
         }
-        res_user = requests.get(user_url, params=user_params, timeout=15)
-        if res_user.status_code != 200:
-            return {"erreur": f"Erreur API ({res_user.status_code}) : {res_user.text[:100]}"}
-        user_data = res_user.json()
+        res = requests.get(direct_url, params=direct_params, timeout=15)
+        data = res.json()
 
-        insights_url = f"https://graph.facebook.com/v21.0/{INSTAGRAM_ACCOUNT_ID}/insights"
-        insights_params = {
-            "metric": "reach",
-            "period": "day",
+        if "error" not in data and "followers_count" in data:
+            reach = get_ig_reach(INSTAGRAM_ACCOUNT_ID, INSTAGRAM_ACCESS_TOKEN)
+            return {
+                "compte": data.get("username", "YourWin"),
+                "abonnes": data.get("followers_count", 0),
+                "publications": data.get("media_count", 0),
+                "portee_jour": reach
+            }
+
+        # Tentative 2 : L'ID renseigné est celui d'une Page Facebook liée
+        page_params = {
+            "fields": "name,instagram_business_account{id,username,followers_count,media_count}",
             "access_token": INSTAGRAM_ACCESS_TOKEN
         }
-        reach_val = "N/A"
-        res_insights = requests.get(insights_url, params=insights_params, timeout=15)
-        if res_insights.status_code == 200:
-            data_ins = res_insights.json().get("data", [])
-            if data_ins and "values" in data_ins[0]:
-                vals = data_ins[0]["values"]
-                if vals:
-                    reach_val = vals[-1].get("value", "N/A")
+        res_page = requests.get(direct_url, params=page_params, timeout=15)
+        page_data = res_page.json()
 
-        return {
-            "abonnes": user_data.get("followers_count", 0),
-            "publications": user_data.get("media_count", 0),
-            "portee_jour": reach_val
+        if "instagram_business_account" in page_data:
+            ig = page_data["instagram_business_account"]
+            real_ig_id = ig.get("id")
+            reach = get_ig_reach(real_ig_id, INSTAGRAM_ACCESS_TOKEN)
+            return {
+                "compte": ig.get("username", "YourWin"),
+                "abonnes": ig.get("followers_count", 0),
+                "publications": ig.get("media_count", 0),
+                "portee_jour": reach
+            }
+
+        # Tentative 3 : Récupération globale via le jeton (/me/accounts)
+        me_url = "https://graph.facebook.com/v21.0/me/accounts"
+        me_params = {
+            "fields": "name,instagram_business_account{id,username,followers_count,media_count}",
+            "access_token": INSTAGRAM_ACCESS_TOKEN
         }
+        res_me = requests.get(me_url, params=me_params, timeout=15)
+        accounts_data = res_me.json().get("data", [])
+
+        for acc in accounts_data:
+            if "instagram_business_account" in acc:
+                ig = acc["instagram_business_account"]
+                real_ig_id = ig.get("id")
+                reach = get_ig_reach(real_ig_id, INSTAGRAM_ACCESS_TOKEN)
+                return {
+                    "compte": ig.get("username", "YourWin"),
+                    "abonnes": ig.get("followers_count", 0),
+                    "publications": ig.get("media_count", 0),
+                    "portee_jour": reach
+                }
+
+        err_msg = data.get("error", {}).get("message", "Compte Instagram non rattaché")
+        return {"erreur": f"API Meta : {err_msg[:120]}"}
+
     except Exception as e:
         return {"erreur": str(e)}
 
-# 5. Audit IA via Gemini
+# 5. Audit IA via Gemini 3
 def generate_ai_analysis(payload):
     if not GEMINI_API_KEY:
         return "⚠️ Clé GEMINI_API_KEY absente dans Railway."
     
     prompt = (
         "Tu es le directeur d'acquisition de la plateforme esport YourWin (yourwin.fr).\n"
-        "Analyse ces donnees d'acquisition d'hier (GA4, Search Console, Google Ads, Instagram) :\n"
+        "Analyse ces données d'acquisition d'hier (GA4, Search Console, Google Ads, Instagram) :\n"
         f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
-        "Redige un audit strategique concis (maximum 900 caracteres) :\n"
+        "Rédige un audit stratégique concis (maximum 900 caractères) :\n"
         "**🎯 Bilan express :** (2 phrases)\n"
         "**⚠️ Points d'attention :** (1 alerte ou faiblesse)\n"
         "**🚀 3 Actions prioritaires :** (3 puces directes)"
@@ -175,8 +222,8 @@ def generate_ai_analysis(payload):
         try:
             res = requests.post(url, json=body, timeout=20)
             if res.status_code == 200:
-                data = res.json()
-                candidates = data.get("candidates", [])
+                resp_json = res.json()
+                candidates = resp_json.get("candidates", [])
                 if candidates and "content" in candidates[0]:
                     parts = candidates[0]["content"].get("parts", [])
                     if parts and "text" in parts[0]:
@@ -207,7 +254,7 @@ def execute_daily_intelligence():
         "date": date_str,
         "ga4": ga4,
         "search_console": gsc,
-        "google_ads": ads_data.get("totals", "Non configure"),
+        "google_ads": ads_data.get("totals", "Non configuré"),
         "instagram": insta
     }
     
@@ -245,8 +292,9 @@ def execute_daily_intelligence():
     if "erreur" in insta:
         message += f"📸 **Instagram :** ⚠️ `{insta['erreur'][:120]}`\n"
     else:
+        compte_nom = insta.get("compte", "YourWin")
         message += (
-            f"📸 **Instagram :**\n"
+            f"📸 **Instagram (@{compte_nom}) :**\n"
             f"• Abonnés : **{insta.get('abonnes', 0)}** | Publications : **{insta.get('publications', 0)}**\n"
             f"• Portée quotidienne (Reach) : **{insta.get('portee_jour', 'N/A')}**\n"
         )
